@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+devicons = "=0.5.4"
+colorsys = "0.6.7"

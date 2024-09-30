@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use colorsys::Rgb;
+use devicons::{icon_for_file, Theme};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -13,7 +14,28 @@ struct FileItem {
     is_dir: bool,
     is_symlink: bool,
     color: String,
-    icon: String,
+    icon: char,
+}
+
+fn start_color(color: &String) -> String {
+    let color = match Rgb::from_hex_str(color) {
+        Ok(color) => color,
+        Err(e) => {
+            println!("ERROR: failed to parse color ({})", e);
+            exit(1);
+        }
+    };
+
+    format!(
+        "\x1B[38;2;{};{};{}m",
+        color.red() as u8,
+        color.green() as u8,
+        color.blue() as u8
+    )
+}
+
+fn stop_color() -> String {
+    "\x1B[0m".to_string()
 }
 
 fn get_current_path() -> String {
@@ -33,10 +55,7 @@ fn get_current_path() -> String {
     }
 }
 
-fn parse_dir_entry(
-    entry: std::fs::DirEntry,
-    colors: &HashMap<String, String>,
-) -> Result<FileItem, String> {
+fn parse_dir_entry(entry: std::fs::DirEntry) -> Result<FileItem, String> {
     let my_path = match entry.path().to_str() {
         Some(path) => path.to_string(),
         None => {
@@ -71,15 +90,17 @@ fn parse_dir_entry(
             exit(1);
         }
     };
+    let icon = icon_for_file(Path::new(&my_path), Some(Theme::Dark));
     let my_icon = if my_filetype.is_dir() {
-        "".to_owned()
+        ''
     } else {
-        "󰈚".to_owned()
+        icon.icon
     };
 
-    let my_color = match colors.get(&my_extension) {
-        Some(color) => color.to_owned(),
-        None => String::from(""),
+    let my_color = if my_filetype.is_dir() {
+        "#3483eb".to_string()
+    } else {
+        icon.color.to_string()
     };
 
     let item = FileItem {
@@ -96,7 +117,7 @@ fn parse_dir_entry(
     Ok(item)
 }
 
-fn parse_single_file(path: &Path, colors: &HashMap<String, String>) -> Result<FileItem, String> {
+fn parse_single_file(path: &Path) -> Result<FileItem, String> {
     let my_path = match path.to_str() {
         Some(data) => data.to_string(),
         None => return Err("Failed to parse path".to_string()),
@@ -118,15 +139,13 @@ fn parse_single_file(path: &Path, colors: &HashMap<String, String>) -> Result<Fi
         None => "".to_string(),
     };
 
-    let my_icon = if path.is_dir() {
-        "".to_owned()
-    } else {
-        "󰈚".to_owned()
-    };
+    let icon = icon_for_file(Path::new(&my_path), Some(Theme::Dark));
+    let my_icon = if path.is_dir() { '' } else { icon.icon };
 
-    let my_color = match colors.get(&my_extension) {
-        Some(color) => color.to_owned(),
-        None => String::from(""),
+    let my_color = if path.is_dir() {
+        "#3483eb".to_string()
+    } else {
+        icon.color.to_string()
     };
 
     let item = FileItem {
@@ -143,35 +162,6 @@ fn parse_single_file(path: &Path, colors: &HashMap<String, String>) -> Result<Fi
     Ok(item)
 }
 
-fn parse_ls_colors() -> HashMap<String, String> {
-    let mut colors: HashMap<String, String> = HashMap::new();
-    let env_colors: String;
-    match env::var("LS_COLORS") {
-        Ok(data) => env_colors = data,
-        Err(_) => {
-            // just return an empty hashmap
-            return colors;
-        }
-    }
-    let values: Vec<&str> = env_colors.split(':').collect();
-
-    for value in values.into_iter() {
-        if value.is_empty() {
-            continue;
-        }
-        let item: Vec<&str> = value.split('=').collect();
-        if item.len() != 2 {
-            // did not get proper items, skip
-            continue;
-        }
-        let extension: String = item[0].replace("*.", "");
-        let color: &str = item[1];
-        colors.insert(extension, color.to_owned());
-    }
-
-    colors
-}
-
 /*
 * TODO
 * - create enum for file types (file, dir, symlink, ...)
@@ -181,11 +171,6 @@ fn parse_ls_colors() -> HashMap<String, String> {
 
 fn main() {
     let mut my_files: Vec<FileItem> = Vec::new();
-    let colors = parse_ls_colors();
-    println!("Found {} ls colors", &colors.len());
-    //for (extension, color) in colors.into_iter() {
-    //    println!("[{extension}] => [{color}]");
-    //}
 
     let args: Vec<String> = env::args().collect();
     let target_path = if args.len() > 1 {
@@ -194,7 +179,6 @@ fn main() {
         // we dont have a parameter so take the current directory
         get_current_path()
     };
-    println!("target_path {}", target_path);
 
     let path = Path::new(&target_path);
 
@@ -212,7 +196,7 @@ fn main() {
                 println!("Got Empty data for entry {}", e);
                 exit(1);
             });
-            let item = match parse_dir_entry(dir_entry, &colors) {
+            let item = match parse_dir_entry(dir_entry) {
                 Ok(data) => data,
                 Err(e) => {
                     println!("ERROR: Failed to parse dir_entry[{}]", e);
@@ -222,7 +206,7 @@ fn main() {
             my_files.push(item);
         });
     } else {
-        let item = match parse_single_file(path, &colors) {
+        let item = match parse_single_file(path) {
             Ok(data) => data,
             Err(e) => {
                 println!("ERROR: Failed to parse file ({})", e);
@@ -233,6 +217,12 @@ fn main() {
     }
 
     for item in &my_files {
-        println!("{} {}", item.icon, item.filename);
+        println!(
+            "{}{} {}{}",
+            start_color(&item.color),
+            item.icon,
+            item.filename,
+            stop_color()
+        );
     }
 }
