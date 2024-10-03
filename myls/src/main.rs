@@ -121,7 +121,12 @@ fn main() {
             }
         } else {
             // then this is a path to parse
-            paths_to_parse.push(arg);
+            let path = Path::new(&arg);
+            if path.exists() {
+                paths_to_parse.push(arg);
+            } else {
+                println!("Cannot access [{}] (path does not exist)", arg);
+            }
         }
     }
     if paths_to_parse.is_empty() {
@@ -129,6 +134,7 @@ fn main() {
         paths_to_parse.push(get_current_path());
     }
 
+    let mut add_path_separator = false;
     for target_path in paths_to_parse.iter() {
         let path = Path::new(target_path);
         if path.is_dir() {
@@ -171,7 +177,11 @@ fn main() {
         // Output the contents
         if paths_to_parse.len() > 1 {
             // we have multiple paths so prepend dir
-            println!("\n{}:", target_path);
+            if add_path_separator {
+                println!("");
+            }
+            println!("{}:", target_path);
+            add_path_separator = true;
         }
         for item in &my_files {
             if item.filename.starts_with(".") && !all_files {
