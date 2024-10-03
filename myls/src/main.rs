@@ -21,7 +21,7 @@ struct FileItem {
     icon: char,
 }
 
-fn start_color(color: &String) -> String {
+fn start_color(color: &str) -> String {
     let color = match Rgb::from_hex_str(color) {
         Ok(color) => color,
         Err(e) => {
@@ -178,7 +178,7 @@ fn main() {
         if paths_to_parse.len() > 1 {
             // we have multiple paths so prepend dir
             if add_path_separator {
-                println!("");
+                println!();
             }
             println!("{}:", target_path);
             add_path_separator = true;
