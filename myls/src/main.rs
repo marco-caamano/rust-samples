@@ -1,3 +1,4 @@
+use chrono::{DateTime, Datelike, Local};
 use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
 use std::env;
@@ -16,10 +17,11 @@ struct FileItem {
     filetype: FileType,
     filesize: u64,
     num_links: u64,
-    uid: u32,
-    gid: u32,
+    user: String,
+    group: String,
     color: String,
     icon: char,
+    modified: String,
 }
 
 struct ListingFlags {
@@ -76,6 +78,7 @@ fn get_current_path() -> String {
 
 fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let my_path = Path::new(path);
+    let cache = UsersCache::new();
 
     let metadata = match my_path.metadata() {
         Ok(data) => data,
@@ -110,13 +113,58 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         my_color = icon.color.to_string();
     }
 
+    let os_user = match cache.get_user_by_uid(metadata.uid()) {
+        Some(user) => user.name().to_owned(),
+        None => OsString::new(),
+    };
+
+    let user = match os_user.into_string() {
+        Ok(user) => user,
+        Err(_) => {
+            eprintln!("ERROR: failed to convert user");
+            String::new()
+        }
+    };
+
+    let os_group = match cache.get_group_by_gid(metadata.gid()) {
+        Some(group) => group.name().to_owned(),
+        None => OsString::new(),
+    };
+
+    let group = match os_group.into_string() {
+        Ok(group) => group,
+        Err(_) => {
+            eprintln!("ERROR: failed to convert group");
+            String::new()
+        }
+    };
+
+    let modified_time = match metadata.modified() {
+        Ok(stime) => {
+            let ltime: DateTime<Local> = DateTime::from(stime);
+            let file_year = ltime.year();
+            let current_time = Local::now();
+            let current_year = current_time.year();
+            if current_year != file_year {
+                format!("{}", current_time.format("%b %d  %Y"))
+            } else {
+                format!("{}", current_time.format("%b %d %H:%M"))
+            }
+        }
+        Err(e) => {
+            eprintln!("ERROR: failed to read modified time for item: {}", e);
+            String::from("")
+        }
+    };
+
     let item = FileItem {
         filename: my_filename,
         filetype: metadata.file_type(),
         filesize: metadata.len(),
         num_links: metadata.nlink(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
+        user,
+        group,
+        modified: modified_time,
         color: my_color,
         icon: my_icon,
     };
@@ -207,6 +255,8 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
     // first traverse the filelist to get max widths
     let mut max_size_width: usize = 0;
     let mut max_link_width: usize = 0;
+    let mut max_user_width: usize = 0;
+    let mut max_group_width: usize = 0;
     for item in items {
         let size_width = get_num_width(item.filesize);
         if size_width > max_size_width {
@@ -216,8 +266,15 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
         if size_link > max_link_width {
             max_link_width = size_link;
         }
+        let user_len = item.user.len();
+        if user_len > max_user_width {
+            max_user_width = user_len;
+        }
+        let group_len = item.group.len();
+        if group_len > max_group_width {
+            max_group_width = group_len;
+        }
     }
-    let mut cache = UsersCache::new();
     for item in items {
         if item.filename.starts_with(".") && !flags.show_all {
             // skip hidden file
@@ -238,40 +295,14 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
         let my_links = item.num_links;
         print!("{my_links:>max_link_width$} ");
 
-        let os_user = match cache.get_user_by_uid(item.uid) {
-            Some(user) => user.name().to_owned(),
-            None => OsString::new(),
-        };
-
-        let user = match os_user.into_string() {
-            Ok(user) => user,
-            Err(_) => {
-                eprintln!("ERROR: failed to convert user");
-                String::new()
-            }
-        };
-
-        let os_group = match cache.get_group_by_gid(item.gid) {
-            Some(group) => group.name().to_owned(),
-            None => OsString::new(),
-        };
-
-        let group = match os_group.into_string() {
-            Ok(group) => group,
-            Err(_) => {
-                eprintln!("ERROR: failed to convert group");
-                String::new()
-            }
-        };
-
-        // TODO need to add padding to user/group see ls -l /tmp for
-        // caamao and root owned files
-        print!("{} {} ", user, group);
+        let user = &item.user;
+        let group = &item.group;
+        print!("{user:>max_user_width$} {group:>max_group_width$} ");
 
         let my_size = item.filesize;
         print!("{my_size:>max_size_width$} ");
 
-        print!("[date] ");
+        print!("{} ", item.modified);
 
         println!(
             "{}{} {}{}",
