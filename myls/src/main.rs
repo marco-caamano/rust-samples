@@ -1,24 +1,39 @@
 use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
+use std::fs::FileType;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
-
-#[derive(Debug)]
-enum FileType {
-    File,
-    Dir,
-    Symlink,
-}
+use std::usize;
+use users::{Groups, Users, UsersCache};
 
 #[derive(Debug)]
 struct FileItem {
-    path: String,
     filename: String,
     filetype: FileType,
+    filesize: u64,
+    num_links: u64,
+    uid: u32,
+    gid: u32,
     color: String,
     icon: char,
+}
+
+struct ListingFlags {
+    show_all: bool,
+    show_details: bool,
+}
+
+impl ListingFlags {
+    fn new() -> ListingFlags {
+        ListingFlags {
+            show_all: false,
+            show_details: false,
+        }
+    }
 }
 
 fn start_color(color: &str) -> String {
@@ -62,6 +77,13 @@ fn get_current_path() -> String {
 fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let my_path = Path::new(path);
 
+    let metadata = match my_path.metadata() {
+        Ok(data) => data,
+        Err(_) => {
+            return Err("Failed to get metadata".to_string());
+        }
+    };
+
     let os_filename = match my_path.file_name() {
         Some(name) => name,
         None => return Err("Failed to parse filename".to_string()),
@@ -73,29 +95,28 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     };
 
     let my_icon: char;
-    let file_type: FileType;
     let my_color: String;
     if my_path.is_dir() {
-        file_type = FileType::Dir;
         my_icon = '';
         my_color = "#3483eb".to_string();
     } else if my_path.is_file() {
-        file_type = FileType::File;
         let icon = icon_for_file(Path::new(&my_path), Some(Theme::Dark));
         my_icon = icon.icon;
         my_color = icon.color.to_string();
     } else {
         // TODO: review the color or any other special handling for symlink
-        file_type = FileType::Symlink;
         let icon = icon_for_file(Path::new(&my_path), Some(Theme::Dark));
         my_icon = icon.icon;
         my_color = icon.color.to_string();
     }
 
     let item = FileItem {
-        path: path.to_string(),
         filename: my_filename,
-        filetype: file_type,
+        filetype: metadata.file_type(),
+        filesize: metadata.len(),
+        num_links: metadata.nlink(),
+        uid: metadata.uid(),
+        gid: metadata.gid(),
         color: my_color,
         icon: my_icon,
     };
@@ -153,9 +174,125 @@ fn parse_path(target_path: &String) -> Vec<FileItem> {
     my_files
 }
 
+fn simple_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
+    for item in items {
+        if item.filename.starts_with(".") && !flags.show_all {
+            // skip hidden file
+            continue;
+        }
+        println!(
+            "{}{} {}{}",
+            start_color(&item.color),
+            item.icon,
+            item.filename,
+            stop_color()
+        );
+    }
+}
+
+fn get_num_width(val: u64) -> usize {
+    let mut width = 0;
+    let mut my_val = val;
+    loop {
+        width += 1;
+        my_val /= 10;
+        if my_val == 0 {
+            break;
+        }
+    }
+    width
+}
+
+fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
+    // first traverse the filelist to get max widths
+    let mut max_size_width: usize = 0;
+    let mut max_link_width: usize = 0;
+    for item in items {
+        let size_width = get_num_width(item.filesize);
+        if size_width > max_size_width {
+            max_size_width = size_width;
+        }
+        let size_link = get_num_width(item.num_links);
+        if size_link > max_link_width {
+            max_link_width = size_link;
+        }
+    }
+    let mut cache = UsersCache::new();
+    for item in items {
+        if item.filename.starts_with(".") && !flags.show_all {
+            // skip hidden file
+            continue;
+        }
+        // start with filetype
+        let ftype = item.filetype;
+        if ftype.is_dir() {
+            print!("d");
+        } else if ftype.is_symlink() {
+            print!("l");
+        } else {
+            print!("-");
+        }
+        // TODO list proper permissions
+        print!("--------- ");
+
+        let my_links = item.num_links;
+        print!("{my_links:>max_link_width$} ");
+
+        let os_user = match cache.get_user_by_uid(item.uid) {
+            Some(user) => user.name().to_owned(),
+            None => OsString::new(),
+        };
+
+        let user = match os_user.into_string() {
+            Ok(user) => user,
+            Err(_) => {
+                eprintln!("ERROR: failed to convert user");
+                String::new()
+            }
+        };
+
+        let os_group = match cache.get_group_by_gid(item.gid) {
+            Some(group) => group.name().to_owned(),
+            None => OsString::new(),
+        };
+
+        let group = match os_group.into_string() {
+            Ok(group) => group,
+            Err(_) => {
+                eprintln!("ERROR: failed to convert group");
+                String::new()
+            }
+        };
+
+        // TODO need to add padding to user/group see ls -l /tmp for
+        // caamao and root owned files
+        print!("{} {} ", user, group);
+
+        let my_size = item.filesize;
+        print!("{my_size:>max_size_width$} ");
+
+        print!("[date] ");
+
+        println!(
+            "{}{} {}{}",
+            start_color(&item.color),
+            item.icon,
+            item.filename,
+            stop_color()
+        );
+    }
+}
+
+/*
+* TODO
+* - Parse LS_COLORS, extract colors for dir and symlink from env
+*   and convert to RGB for text coloring
+*
+*/
+
 fn main() {
     let mut paths_to_parse: Vec<String> = Vec::new();
-    let mut all_files: bool = false;
+    let mut flags: ListingFlags = ListingFlags::new();
 
     let mut skipped_first: bool = false;
     for arg in env::args() {
@@ -167,7 +304,10 @@ fn main() {
         if arg.starts_with('-') {
             // we have a group of command line parameters
             if arg.contains('a') {
-                all_files = true;
+                flags.show_all = true;
+            }
+            if arg.contains('l') {
+                flags.show_details = true;
             }
         } else {
             // then this is a path to parse
@@ -197,18 +337,10 @@ fn main() {
             println!("{}:", target_path);
             add_path_separator = true;
         }
-        for item in &my_files {
-            if item.filename.starts_with(".") && !all_files {
-                // skip hidden file
-                continue;
-            }
-            println!(
-                "{}{} {}{}",
-                start_color(&item.color),
-                item.icon,
-                item.filename,
-                stop_color()
-            );
+        if flags.show_details {
+            detailed_listing(&my_files, &flags);
+        } else {
+            simple_listing(&my_files, &flags);
         }
     }
 }
