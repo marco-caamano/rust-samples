@@ -9,6 +9,7 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
+use std::time::SystemTime;
 use users::{Groups, Users, UsersCache};
 
 #[derive(Debug)]
@@ -22,12 +23,15 @@ struct FileItem {
     color: String,
     icon: char,
     modified: String,
+    last_modified: SystemTime,
     mode: u32,
 }
 
 struct ListingFlags {
     show_all: bool,
     show_details: bool,
+    reverse_sort: bool,
+    sort_by_time: bool,
 }
 
 impl ListingFlags {
@@ -35,6 +39,8 @@ impl ListingFlags {
         ListingFlags {
             show_all: false,
             show_details: false,
+            reverse_sort: false,
+            sort_by_time: false,
         }
     }
 }
@@ -149,22 +155,22 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         }
     };
 
-    let modified_time = match sym_metadata.modified() {
-        Ok(stime) => {
-            let ltime: DateTime<Local> = DateTime::from(stime);
-            let file_year = ltime.year();
-            let current_time = Local::now();
-            let current_year = current_time.year();
-            if current_year != file_year {
-                format!("{}", current_time.format("%b %d  %Y"))
-            } else {
-                format!("{}", current_time.format("%b %d %H:%M"))
-            }
-        }
+    let last_modified = match sym_metadata.modified() {
+        Ok(time) => time,
         Err(e) => {
-            eprintln!("ERROR: failed to read modified time for item: {}", e);
-            String::from("")
+            eprintln!("ERROR: Failed to read modified time for item: {}", e);
+            SystemTime::UNIX_EPOCH
         }
+    };
+
+    let ltime: DateTime<Local> = DateTime::from(last_modified);
+    let file_year = ltime.year();
+    let current_time = Local::now();
+    let current_year = current_time.year();
+    let modified_time = if current_year != file_year {
+        format!("{}", current_time.format("%b %d  %Y"))
+    } else {
+        format!("{}", current_time.format("%b %d %H:%M"))
     };
 
     let mode = sym_metadata.mode();
@@ -180,6 +186,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         color: my_color,
         icon: my_icon,
         mode,
+        last_modified,
     };
 
     Ok(item)
@@ -415,6 +422,12 @@ fn main() {
             if arg.contains('l') {
                 flags.show_details = true;
             }
+            if arg.contains('t') {
+                flags.sort_by_time = true;
+            }
+            if arg.contains('r') {
+                flags.reverse_sort = true;
+            }
         } else {
             // then this is a path to parse
             let path = Path::new(&arg);
@@ -432,7 +445,7 @@ fn main() {
 
     let mut add_path_separator = false;
     for target_path in paths_to_parse.iter() {
-        let my_files: Vec<FileItem> = parse_path(target_path);
+        let mut my_files: Vec<FileItem> = parse_path(target_path);
 
         // Output the contents
         if paths_to_parse.len() > 1 {
@@ -443,6 +456,26 @@ fn main() {
             println!("{}:", target_path);
             add_path_separator = true;
         }
+
+        // Sort files
+        if flags.sort_by_time {
+            // sort by modified time
+            if flags.reverse_sort {
+                // reverse order
+                my_files.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+            } else {
+                my_files.sort_by(|a, b| a.last_modified.cmp(&b.last_modified));
+            }
+        } else {
+            // sort by filename
+            if flags.reverse_sort {
+                // reverse order
+                my_files.sort_by(|a, b| b.filename.cmp(&a.filename));
+            } else {
+                my_files.sort_by(|a, b| a.filename.cmp(&b.filename));
+            }
+        }
+
         if flags.show_details {
             detailed_listing(&my_files, &flags);
         } else {
