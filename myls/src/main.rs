@@ -1,27 +1,28 @@
 use chrono::{DateTime, Datelike, Local};
 use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
+use libc::{S_IRGRP, S_IROTH, S_IRUSR, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP, S_IXOTH, S_IXUSR};
 use std::env;
 use std::ffi::OsString;
-use std::fs;
-use std::fs::FileType;
+use std::fs::{self, Metadata};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
-use std::usize;
 use users::{Groups, Users, UsersCache};
 
 #[derive(Debug)]
 struct FileItem {
     filename: String,
-    filetype: FileType,
+    abs_metadata: Metadata,
+    sym_metadata: Metadata,
     filesize: u64,
-    num_links: u64,
     user: String,
     group: String,
     color: String,
     icon: char,
     modified: String,
+    mode: u32,
 }
 
 struct ListingFlags {
@@ -80,10 +81,19 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let my_path = Path::new(path);
     let cache = UsersCache::new();
 
-    let metadata = match my_path.metadata() {
+    // Use symlink_metadata to not traverse any symbolic my_links
+    // (it seems it is named backwards...)
+    let sym_metadata = match my_path.symlink_metadata() {
         Ok(data) => data,
         Err(_) => {
-            return Err("Failed to get metadata".to_string());
+            return Err("Failed to get syn metadata".to_string());
+        }
+    };
+
+    let abs_metadata = match my_path.metadata() {
+        Ok(data) => data,
+        Err(_) => {
+            return Err("Failed to get abs metadata".to_string());
         }
     };
 
@@ -113,7 +123,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         my_color = icon.color.to_string();
     }
 
-    let os_user = match cache.get_user_by_uid(metadata.uid()) {
+    let os_user = match cache.get_user_by_uid(sym_metadata.uid()) {
         Some(user) => user.name().to_owned(),
         None => OsString::new(),
     };
@@ -126,7 +136,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         }
     };
 
-    let os_group = match cache.get_group_by_gid(metadata.gid()) {
+    let os_group = match cache.get_group_by_gid(sym_metadata.gid()) {
         Some(group) => group.name().to_owned(),
         None => OsString::new(),
     };
@@ -139,7 +149,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         }
     };
 
-    let modified_time = match metadata.modified() {
+    let modified_time = match sym_metadata.modified() {
         Ok(stime) => {
             let ltime: DateTime<Local> = DateTime::from(stime);
             let file_year = ltime.year();
@@ -157,16 +167,19 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         }
     };
 
+    let mode = sym_metadata.mode();
+
     let item = FileItem {
         filename: my_filename,
-        filetype: metadata.file_type(),
-        filesize: metadata.len(),
-        num_links: metadata.nlink(),
+        sym_metadata: sym_metadata.clone(),
+        abs_metadata: abs_metadata.clone(),
+        filesize: sym_metadata.len(),
         user,
         group,
         modified: modified_time,
         color: my_color,
         icon: my_icon,
+        mode,
     };
 
     Ok(item)
@@ -222,6 +235,60 @@ fn parse_path(target_path: &String) -> Vec<FileItem> {
     my_files
 }
 
+fn parse_mode(mode: u32) -> String {
+    let mut perm = String::new();
+
+    if mode & S_IRUSR == S_IRUSR {
+        perm.push('r');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IWUSR == S_IWUSR {
+        perm.push('w');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IXUSR == S_IXUSR {
+        perm.push('x');
+    } else {
+        perm.push('-');
+    }
+
+    if mode & S_IRGRP == S_IRGRP {
+        perm.push('r');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IWGRP == S_IWGRP {
+        perm.push('w');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IXGRP == S_IXGRP {
+        perm.push('x');
+    } else {
+        perm.push('-');
+    }
+
+    if mode & S_IROTH == S_IROTH {
+        perm.push('r');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IWOTH == S_IWOTH {
+        perm.push('w');
+    } else {
+        perm.push('-');
+    }
+    if mode & S_IXOTH == S_IXOTH {
+        perm.push('x');
+    } else {
+        perm.push('-');
+    }
+
+    perm
+}
+
 fn simple_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
     for item in items {
         if item.filename.starts_with(".") && !flags.show_all {
@@ -262,7 +329,7 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
         if size_width > max_size_width {
             max_size_width = size_width;
         }
-        let size_link = get_num_width(item.num_links);
+        let size_link = get_num_width(item.sym_metadata.nlink());
         if size_link > max_link_width {
             max_link_width = size_link;
         }
@@ -280,19 +347,27 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
             // skip hidden file
             continue;
         }
-        // start with filetype
-        let ftype = item.filetype;
-        if ftype.is_dir() {
-            print!("d");
-        } else if ftype.is_symlink() {
-            print!("l");
-        } else {
-            print!("-");
-        }
-        // TODO list proper permissions
-        print!("--------- ");
 
-        let my_links = item.num_links;
+        // start with filetype
+        let ftype: char;
+        let mode = item.mode;
+
+        if item.sym_metadata.is_dir() {
+            ftype = 'd';
+        } else if item.sym_metadata.is_symlink() {
+            ftype = 'l';
+        } else if item.abs_metadata.file_type().is_char_device() {
+            ftype = 'c';
+        } else if item.sym_metadata.file_type().is_block_device() {
+            ftype = 'b';
+        } else {
+            ftype = '-';
+        }
+        let perms = parse_mode(mode);
+
+        print!("{}{} ", ftype, perms);
+
+        let my_links = item.sym_metadata.nlink();
         print!("{my_links:>max_link_width$} ");
 
         let user = &item.user;
