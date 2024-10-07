@@ -168,9 +168,9 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let current_time = Local::now();
     let current_year = current_time.year();
     let modified_time = if current_year != file_year {
-        format!("{}", current_time.format("%b %d  %Y"))
+        format!("{}", ltime.format("%b %d  %Y"))
     } else {
-        format!("{}", current_time.format("%b %d %H:%M"))
+        format!("{}", ltime.format("%b %d %H:%M"))
     };
 
     let mode = sym_metadata.mode();
