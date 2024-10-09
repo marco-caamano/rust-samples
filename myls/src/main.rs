@@ -8,6 +8,7 @@ use std::fs::{self, Metadata};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::exit;
 use std::time::SystemTime;
 use users::{Groups, Users, UsersCache};
@@ -17,6 +18,7 @@ struct FileItem {
     filename: String,
     abs_metadata: Metadata,
     sym_metadata: Metadata,
+    symlink_path: String,
     filesize: u64,
     user: String,
     group: String,
@@ -168,17 +170,32 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let current_time = Local::now();
     let current_year = current_time.year();
     let modified_time = if current_year != file_year {
-        format!("{}", ltime.format("%b %d  %Y"))
+        format!("{}", ltime.format("%b %e  %Y"))
     } else {
-        format!("{}", ltime.format("%b %d %H:%M"))
+        format!("{}", ltime.format("%b %e %H:%M"))
     };
 
     let mode = sym_metadata.mode();
+
+    let symlink_path: String = if sym_metadata.is_symlink() {
+        let path = match fs::read_link(my_path) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("Failed to read path from symlink: {}", e);
+                PathBuf::from("")
+            }
+        };
+        let os_path = path.to_str().unwrap_or("");
+        os_path.to_string()
+    } else {
+        String::new()
+    };
 
     let item = FileItem {
         filename: my_filename,
         sym_metadata: sym_metadata.clone(),
         abs_metadata: abs_metadata.clone(),
+        symlink_path,
         filesize: sym_metadata.len(),
         user,
         group,
@@ -358,11 +375,13 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
         // start with filetype
         let ftype: char;
         let mode = item.mode;
+        let mut is_symlink = false;
 
         if item.sym_metadata.is_dir() {
             ftype = 'd';
         } else if item.sym_metadata.is_symlink() {
             ftype = 'l';
+            is_symlink = true;
         } else if item.abs_metadata.file_type().is_char_device() {
             ftype = 'c';
         } else if item.sym_metadata.file_type().is_block_device() {
@@ -386,13 +405,23 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
 
         print!("{} ", item.modified);
 
-        println!(
+        print!(
             "{}{} {}{}",
             start_color(&item.color),
             item.icon,
             item.filename,
             stop_color()
         );
+
+        if is_symlink {
+            print!(
+                " -> {}{}{}",
+                start_color(&item.color),
+                item.symlink_path,
+                stop_color()
+            );
+        }
+        print!("\n");
     }
 }
 
