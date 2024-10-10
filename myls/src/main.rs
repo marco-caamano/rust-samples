@@ -13,6 +13,11 @@ use std::process::exit;
 use std::time::SystemTime;
 use users::{Groups, Users, UsersCache};
 
+const KB: f64 = 1024.0;
+const MB: f64 = 1024.0 * KB;
+const GB: f64 = 1024.0 * MB;
+const TB: f64 = 1024.0 * GB;
+
 #[derive(Debug)]
 struct FileItem {
     filename: String,
@@ -20,6 +25,7 @@ struct FileItem {
     sym_metadata: Metadata,
     symlink_path: String,
     filesize: u64,
+    human_readable_size: String,
     user: String,
     group: String,
     color: String,
@@ -34,6 +40,7 @@ struct ListingFlags {
     show_details: bool,
     reverse_sort: bool,
     sort_by_time: bool,
+    human_readable: bool,
 }
 
 impl ListingFlags {
@@ -43,6 +50,7 @@ impl ListingFlags {
             show_details: false,
             reverse_sort: false,
             sort_by_time: false,
+            human_readable: false,
         }
     }
 }
@@ -119,7 +127,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
     let my_color: String;
     if my_path.is_dir() {
         my_icon = '';
-        my_color = "#3483eb".to_string();
+        my_color = "#3483eb".to_string()
     } else if my_path.is_file() {
         let icon = icon_for_file(Path::new(&my_path), Some(Theme::Dark));
         my_icon = icon.icon;
@@ -197,6 +205,7 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         abs_metadata: abs_metadata.clone(),
         symlink_path,
         filesize: sym_metadata.len(),
+        human_readable_size: get_human_readable(sym_metadata.len()),
         user,
         group,
         modified: modified_time,
@@ -342,16 +351,39 @@ fn get_num_width(val: u64) -> usize {
     width
 }
 
+fn get_human_readable(my_size: u64) -> String {
+    let val: f64 = my_size as f64;
+    if val > TB {
+        format!("{:.1}T", val / TB)
+    } else if val > GB {
+        format!("{:.1}G", val / GB)
+    } else if val > MB {
+        format!("{:.1}M", val / MB)
+    } else if val > KB {
+        format!("{:.1}K", val / KB)
+    } else {
+        format!("{my_size}")
+    }
+}
+
 fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
     // first traverse the filelist to get max widths
     let mut max_size_width: usize = 0;
+    let mut max_human_size_width: usize = 0;
     let mut max_link_width: usize = 0;
     let mut max_user_width: usize = 0;
     let mut max_group_width: usize = 0;
     for item in items {
-        let size_width = get_num_width(item.filesize);
-        if size_width > max_size_width {
-            max_size_width = size_width;
+        if flags.human_readable {
+            let human_width = item.human_readable_size.len();
+            if human_width > max_human_size_width {
+                max_human_size_width = human_width;
+            }
+        } else {
+            let size_width = get_num_width(item.filesize);
+            if size_width > max_size_width {
+                max_size_width = size_width;
+            }
         }
         let size_link = get_num_width(item.sym_metadata.nlink());
         if size_link > max_link_width {
@@ -400,27 +432,42 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
         let group = &item.group;
         print!("{user:>max_user_width$} {group:>max_group_width$} ");
 
-        let my_size = item.filesize;
-        print!("{my_size:>max_size_width$} ");
+        if flags.human_readable {
+            let my_human_size = &item.human_readable_size;
+            print!("{my_human_size:>max_human_size_width$} ");
+        } else {
+            let my_size = item.filesize;
+            print!("{my_size:>max_size_width$} ");
+        }
 
         print!("{} ", item.modified);
 
-        print!(
-            "{}{} {}{}",
-            start_color(&item.color),
-            item.icon,
-            item.filename,
-            stop_color()
-        );
-
         if is_symlink {
+            // we need to handle colors a bit different
             print!(
-                " -> {}{}{}",
+                "{}{} {}{}",
+                start_color("#09bfc9"),
+                item.icon,
+                item.filename,
+                stop_color()
+            );
+            print!(
+                " -> {}{} {}{}",
                 start_color(&item.color),
+                item.icon,
                 item.symlink_path,
                 stop_color()
             );
+        } else {
+            print!(
+                "{}{} {}{}",
+                start_color(&item.color),
+                item.icon,
+                item.filename,
+                stop_color()
+            );
         }
+
         print!("\n");
     }
 }
@@ -456,6 +503,9 @@ fn main() {
             }
             if arg.contains('r') {
                 flags.reverse_sort = true;
+            }
+            if arg.contains('h') {
+                flags.human_readable = true;
             }
         } else {
             // then this is a path to parse
