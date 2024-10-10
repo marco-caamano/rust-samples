@@ -1,7 +1,10 @@
 use chrono::{DateTime, Datelike, Local};
 use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
-use libc::{S_IRGRP, S_IROTH, S_IRUSR, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP, S_IXOTH, S_IXUSR};
+use libc::{
+    S_IRGRP, S_IROTH, S_IRUSR, S_ISGID, S_ISUID, S_ISVTX, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP,
+    S_IXOTH, S_IXUSR,
+};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, Metadata};
@@ -282,9 +285,19 @@ fn parse_mode(mode: u32) -> String {
         perm.push('-');
     }
     if mode & S_IXUSR == S_IXUSR {
-        perm.push('x');
+        // check for suid bit
+        if mode & S_ISUID == S_ISUID {
+            perm.push('s');
+        } else {
+            perm.push('x');
+        }
     } else {
-        perm.push('-');
+        // check for suid bit
+        if mode & S_ISUID == S_ISUID {
+            perm.push('S');
+        } else {
+            perm.push('-');
+        }
     }
 
     if mode & S_IRGRP == S_IRGRP {
@@ -298,9 +311,19 @@ fn parse_mode(mode: u32) -> String {
         perm.push('-');
     }
     if mode & S_IXGRP == S_IXGRP {
-        perm.push('x');
+        // check for guid bit
+        if mode & S_ISGID == S_ISGID {
+            perm.push('s');
+        } else {
+            perm.push('x');
+        }
     } else {
-        perm.push('-');
+        // check for guid bit
+        if mode & S_ISGID == S_ISGID {
+            perm.push('S');
+        } else {
+            perm.push('-');
+        }
     }
 
     if mode & S_IROTH == S_IROTH {
@@ -314,9 +337,19 @@ fn parse_mode(mode: u32) -> String {
         perm.push('-');
     }
     if mode & S_IXOTH == S_IXOTH {
-        perm.push('x');
+        // check for sticky bit
+        if mode & S_ISVTX == S_ISVTX {
+            perm.push('t');
+        } else {
+            perm.push('x');
+        }
     } else {
-        perm.push('-');
+        // check for sticky bit
+        if mode & S_ISVTX == S_ISVTX {
+            perm.push('T');
+        } else {
+            perm.push('-');
+        }
     }
 
     perm
