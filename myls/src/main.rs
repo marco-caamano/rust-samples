@@ -39,6 +39,7 @@ struct FileItem {
 }
 
 struct ListingFlags {
+    show_help: bool,
     show_all: bool,
     show_details: bool,
     reverse_sort: bool,
@@ -49,6 +50,7 @@ struct ListingFlags {
 impl ListingFlags {
     fn new() -> ListingFlags {
         ListingFlags {
+            show_help: false,
             show_all: false,
             show_details: false,
             reverse_sort: false,
@@ -407,6 +409,10 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
     let mut max_user_width: usize = 0;
     let mut max_group_width: usize = 0;
     for item in items {
+        if item.filename.starts_with(".") && !flags.show_all {
+            // skip hidden file
+            continue;
+        }
         if flags.human_readable {
             let human_width = item.human_readable_size.len();
             if human_width > max_human_size_width {
@@ -505,6 +511,17 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
     }
 }
 
+fn show_help() {
+    println!("\nMyLS: very simple implementation of ls utility written in Rust\n");
+    println!("Usage: myls [OPTION]... [FILE]...");
+    println!("Arguments:");
+    println!("    -a       Show hidden files");
+    println!("    -l       Show long listing");
+    println!("    -h       Show human readable sizes");
+    println!("    -t       Sort by last modified time");
+    println!("    -r       Reverse sort\n");
+}
+
 /*
 * TODO
 * - Parse LS_COLORS, extract colors for dir and symlink from env
@@ -523,7 +540,9 @@ fn main() {
             skipped_first = true;
             continue;
         }
-        if arg.starts_with('-') {
+        if arg == "--help" {
+            flags.show_help = true;
+        } else if arg.starts_with('-') {
             // we have a group of command line parameters
             if arg.contains('a') {
                 flags.show_all = true;
@@ -549,6 +568,10 @@ fn main() {
                 eprintln!("Cannot access [{}] (path does not exist)", arg);
             }
         }
+    }
+    if flags.show_help {
+        show_help();
+        exit(0);
     }
     if paths_to_parse.is_empty() {
         // since we did not get any paths to parse default to current directory
