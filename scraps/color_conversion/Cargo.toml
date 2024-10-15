@@ -1,0 +1,8 @@
+[package]
+name = "color_conversion"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+colorsys = "0.6.7"
+
