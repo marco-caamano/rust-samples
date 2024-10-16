@@ -20,7 +20,7 @@ struct Args {
     length: Option<u64>,
 
     /// offset bytes from the beginning
-    #[arg(short, long, default_value = "0")]
+    #[arg(short = 's', long = "skip", default_value = "0")]
     offset: Option<u64>,
 }
 
@@ -56,7 +56,7 @@ fn main() {
     };
 
     let size = meta.size();
-    println!("File Size: [{}] bytes", size);
+    println!("File Size:      [{}] bytes", size);
 
     if offset != 0 {
         if offset > size {
@@ -80,8 +80,12 @@ fn main() {
 
     let mut buffer: Vec<u8> = vec![0; BUFFER_SIZE];
 
-    let mut bytes_remaining = size;
+    let mut bytes_remaining = size - offset;
+    if length != 0 && length != bytes_remaining {
+        bytes_remaining = length;
+    }
     let mut printed_offset: u64 = offset;
+    let mut bytes_printed: u64 = 0;
 
     while bytes_remaining > 0 {
         let bytes_read = match file.read(&mut buffer[..]) {
@@ -105,6 +109,7 @@ fn main() {
             } else {
                 ascii_out.push('.');
             }
+            bytes_printed += 1;
             col_count += 1;
             if col_count == 8 {
                 print!(" ");
@@ -116,16 +121,28 @@ fn main() {
                 printed_offset += 16;
                 ascii_out.clear();
             }
+            if bytes_printed >= length {
+                // reached n bytes to dump
+                break;
+            }
         }
         if col_count != 0 {
             // we ended with a partial row, print out the ascii text
             let padding = (16 - col_count) * 3;
             let pad_str = " ".to_string().repeat(padding.into());
-            print!("{} ", pad_str);
+            print!("{}", pad_str);
+            if col_count < 8 {
+                // add extra space to account for extra space in the middle of the line
+                print!(" ");
+            }
 
             println!(" |{ascii_out}|");
         }
 
-        bytes_remaining -= bytes_read as u64;
+        if bytes_remaining > bytes_read as u64 {
+            bytes_remaining -= bytes_read as u64;
+        } else {
+            bytes_remaining = 0;
+        }
     }
 }
