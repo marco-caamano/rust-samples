@@ -21,7 +21,7 @@ async fn get_users() -> impl Responder {
     let vec = USERS.lock().unwrap();
     // Dereference all users contained in the "database"
     let users_json = serde_json::to_string(&*vec).unwrap();
-    HttpResponse::Ok().body(users_json)
+    HttpResponse::Ok().body(format!("{}\n", users_json))
 }
 
 // Handler for the POST request
