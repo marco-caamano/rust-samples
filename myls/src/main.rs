@@ -77,8 +77,8 @@ fn start_color(color: &str) -> String {
     )
 }
 
-fn stop_color() -> String {
-    "\x1B[0m".to_string()
+fn stop_color() -> &'static str {
+    "\x1B[0m"
 }
 
 fn get_current_path() -> String {
