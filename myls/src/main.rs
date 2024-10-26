@@ -6,16 +6,16 @@ use libc::{
     S_IRGRP, S_IROTH, S_IRUSR, S_ISGID, S_ISUID, S_ISVTX, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP,
     S_IXOTH, S_IXUSR,
 };
+use std::collections::HashMap;
 use std::env;
-use std::ffi::OsString;
 use std::fs::{self, Metadata};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::exit;
+use std::str::FromStr;
 use std::time::SystemTime;
-use users::{Groups, Users, UsersCache};
 
 const KB: f64 = 1024.0;
 const MB: f64 = 1024.0 * KB;
@@ -71,6 +71,22 @@ struct FileItem {
     mode: u32,
 }
 
+struct Context {
+    uid_map: HashMap<u32, String>,
+    gid_map: HashMap<u32, String>,
+    flags: ListingFlags,
+}
+
+impl Context {
+    fn new() -> Context {
+        Context {
+            uid_map: HashMap::new(),
+            gid_map: HashMap::new(),
+            flags: ListingFlags::new(),
+        }
+    }
+}
+
 struct ListingFlags {
     show_all: bool,
     show_details: bool,
@@ -88,6 +104,36 @@ impl ListingFlags {
             sort_by_time: false,
             human_readable: false,
         }
+    }
+}
+
+fn map_ids(path: &str, map: &mut HashMap<u32, String>) {
+    let data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Failed to read {} file. Reason: {}", path, e);
+            exit(1);
+        }
+    };
+
+    for line in data.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split(':').collect();
+        if cols.len() < 3 {
+            // something wrong with the line we got
+            continue;
+        }
+        let username = cols[0].to_string();
+        let id = match FromStr::from_str(cols[2]) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Failed to covert uid[{}] to number. Reason: {}", cols[2], e);
+                continue;
+            }
+        };
+        map.insert(id, username);
     }
 }
 
@@ -129,9 +175,8 @@ fn get_current_path() -> String {
     }
 }
 
-fn parse_file_entry(path: &String) -> Result<FileItem, String> {
+fn parse_file_entry(path: &String, ctx: &Context) -> Result<FileItem, String> {
     let my_path = Path::new(path);
-    let cache = UsersCache::new();
 
     // Use symlink_metadata to not traverse any symbolic my_links
     // (it seems it is named backwards...)
@@ -175,30 +220,14 @@ fn parse_file_entry(path: &String) -> Result<FileItem, String> {
         my_color = icon.color.to_string();
     }
 
-    let os_user = match cache.get_user_by_uid(sym_metadata.uid()) {
-        Some(user) => user.name().to_owned(),
-        None => OsString::new(),
+    let user = match ctx.uid_map.get(&sym_metadata.uid()) {
+        Some(user) => user.to_owned(),
+        None => "----".to_owned(),
     };
 
-    let user = match os_user.into_string() {
-        Ok(user) => user,
-        Err(_) => {
-            eprintln!("ERROR: failed to convert user");
-            String::new()
-        }
-    };
-
-    let os_group = match cache.get_group_by_gid(sym_metadata.gid()) {
-        Some(group) => group.name().to_owned(),
-        None => OsString::new(),
-    };
-
-    let group = match os_group.into_string() {
-        Ok(group) => group,
-        Err(_) => {
-            eprintln!("ERROR: failed to convert group");
-            String::new()
-        }
+    let group = match ctx.gid_map.get(&sym_metadata.gid()) {
+        Some(group) => group.to_owned(),
+        None => "----".to_owned(),
     };
 
     let last_modified = match sym_metadata.modified() {
@@ -279,7 +308,7 @@ fn parse_directory(path: &Path, items: &mut Vec<String>) {
     });
 }
 
-fn parse_path(target_path: &String) -> Vec<FileItem> {
+fn parse_path(target_path: &String, ctx: &Context) -> Vec<FileItem> {
     let mut my_paths: Vec<String> = Vec::new();
     let mut my_files: Vec<FileItem> = Vec::new();
 
@@ -291,7 +320,7 @@ fn parse_path(target_path: &String) -> Vec<FileItem> {
     }
 
     for path in my_paths.iter() {
-        let item = match parse_file_entry(path) {
+        let item = match parse_file_entry(path, ctx) {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("ERROR: Failed to parse file ({})", e);
@@ -562,24 +591,24 @@ fn show_help() {
 
 fn main() {
     let mut paths_to_parse: Vec<String> = Vec::new();
-    let mut flags: ListingFlags = ListingFlags::new();
+    let mut ctx: Context = Context::new();
 
     let args = Args::parse();
 
     if args.all {
-        flags.show_all = true;
+        ctx.flags.show_all = true;
     }
     if args.details {
-        flags.show_details = true;
+        ctx.flags.show_details = true;
     }
     if args.time {
-        flags.sort_by_time = true;
+        ctx.flags.sort_by_time = true;
     }
     if args.human {
-        flags.human_readable = true;
+        ctx.flags.human_readable = true;
     }
     if args.reverse {
-        flags.reverse_sort = true;
+        ctx.flags.reverse_sort = true;
     }
     if args.help {
         show_help();
@@ -593,9 +622,13 @@ fn main() {
         paths_to_parse.push(get_current_path());
     }
 
+    // parse the uid and gid
+    map_ids("/etc/passwd", &mut ctx.uid_map);
+    map_ids("/etc/group", &mut ctx.gid_map);
+
     let mut add_path_separator = false;
     for target_path in paths_to_parse.iter() {
-        let mut my_files: Vec<FileItem> = parse_path(target_path);
+        let mut my_files: Vec<FileItem> = parse_path(target_path, &ctx);
 
         // Output the contents
         if paths_to_parse.len() > 1 {
@@ -608,9 +641,9 @@ fn main() {
         }
 
         // Sort files
-        if flags.sort_by_time {
+        if ctx.flags.sort_by_time {
             // sort by modified time
-            if flags.reverse_sort {
+            if ctx.flags.reverse_sort {
                 // reverse order
                 my_files.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
             } else {
@@ -618,7 +651,7 @@ fn main() {
             }
         } else {
             // sort by filename
-            if flags.reverse_sort {
+            if ctx.flags.reverse_sort {
                 // reverse order
                 my_files.sort_by(|a, b| b.filename.cmp(&a.filename));
             } else {
@@ -626,10 +659,10 @@ fn main() {
             }
         }
 
-        if flags.show_details {
-            detailed_listing(&my_files, &flags);
+        if ctx.flags.show_details {
+            detailed_listing(&my_files, &ctx.flags);
         } else {
-            simple_listing(&my_files, &flags);
+            simple_listing(&my_files, &ctx.flags);
         }
     }
 }
