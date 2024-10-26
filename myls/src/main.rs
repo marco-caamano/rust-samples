@@ -1,4 +1,5 @@
 use chrono::{DateTime, Datelike, Local};
+use clap::Parser;
 use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
 use libc::{
@@ -21,6 +22,38 @@ const MB: f64 = 1024.0 * KB;
 const GB: f64 = 1024.0 * MB;
 const TB: f64 = 1024.0 * GB;
 
+/// Simple LS implementation
+#[derive(Parser)]
+#[command(version, disable_help_flag = true)]
+struct Args {
+    /// PATHs to process. Can be a path or a single file path
+    paths: Vec<String>,
+
+    /// Show all hidden items
+    #[arg(short, long)]
+    all: bool,
+
+    /// Show details
+    #[arg(short = 'l', long = "listing")]
+    details: bool,
+
+    /// Sort by modification time
+    #[arg(short, long)]
+    time: bool,
+
+    /// Reverse sorting
+    #[arg(short, long)]
+    reverse: bool,
+
+    /// Human readable details
+    #[arg(short, long)]
+    human: bool,
+
+    /// Show help
+    #[arg(long)]
+    help: bool,
+}
+
 #[derive(Debug)]
 struct FileItem {
     filename: String,
@@ -39,7 +72,6 @@ struct FileItem {
 }
 
 struct ListingFlags {
-    show_help: bool,
     show_all: bool,
     show_details: bool,
     reverse_sort: bool,
@@ -50,7 +82,6 @@ struct ListingFlags {
 impl ListingFlags {
     fn new() -> ListingFlags {
         ListingFlags {
-            show_help: false,
             show_all: false,
             show_details: false,
             reverse_sort: false,
@@ -507,7 +538,7 @@ fn detailed_listing(items: &Vec<FileItem>, flags: &ListingFlags) {
             );
         }
 
-        print!("\n");
+        println!();
     }
 }
 
@@ -533,45 +564,29 @@ fn main() {
     let mut paths_to_parse: Vec<String> = Vec::new();
     let mut flags: ListingFlags = ListingFlags::new();
 
-    let mut skipped_first: bool = false;
-    for arg in env::args() {
-        if !skipped_first {
-            // skip the first argument that is the program name
-            skipped_first = true;
-            continue;
-        }
-        if arg == "--help" {
-            flags.show_help = true;
-        } else if arg.starts_with('-') {
-            // we have a group of command line parameters
-            if arg.contains('a') {
-                flags.show_all = true;
-            }
-            if arg.contains('l') {
-                flags.show_details = true;
-            }
-            if arg.contains('t') {
-                flags.sort_by_time = true;
-            }
-            if arg.contains('r') {
-                flags.reverse_sort = true;
-            }
-            if arg.contains('h') {
-                flags.human_readable = true;
-            }
-        } else {
-            // then this is a path to parse
-            let path = Path::new(&arg);
-            if path.exists() {
-                paths_to_parse.push(arg);
-            } else {
-                eprintln!("Cannot access [{}] (path does not exist)", arg);
-            }
-        }
+    let args = Args::parse();
+
+    if args.all {
+        flags.show_all = true;
     }
-    if flags.show_help {
+    if args.details {
+        flags.show_details = true;
+    }
+    if args.time {
+        flags.sort_by_time = true;
+    }
+    if args.human {
+        flags.human_readable = true;
+    }
+    if args.reverse {
+        flags.reverse_sort = true;
+    }
+    if args.help {
         show_help();
         exit(0);
+    }
+    for item in args.paths {
+        paths_to_parse.push(item);
     }
     if paths_to_parse.is_empty() {
         // since we did not get any paths to parse default to current directory
