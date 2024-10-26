@@ -1,6 +1,5 @@
 use chrono::{DateTime, Datelike, Local};
 use clap::Parser;
-use colorsys::Rgb;
 use devicons::{icon_for_file, Theme};
 use libc::{
     S_IRGRP, S_IROTH, S_IRUSR, S_ISGID, S_ISUID, S_ISVTX, S_IWGRP, S_IWOTH, S_IWUSR, S_IXGRP,
@@ -21,6 +20,10 @@ const KB: f64 = 1024.0;
 const MB: f64 = 1024.0 * KB;
 const GB: f64 = 1024.0 * MB;
 const TB: f64 = 1024.0 * GB;
+
+const ERR_EMPTY_STRING: &str = "Empty Hex String";
+const ERR_INVALID_FORMAT: &str = "Invalid format (must be #XXXXXX)";
+const ERR_PARSE_ERROR: &str = "Failed Parsing Hex Value";
 
 /// Simple LS implementation
 #[derive(Parser)]
@@ -107,6 +110,52 @@ impl ListingFlags {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct Rgb {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+impl Rgb {
+    fn new() -> Rgb {
+        Rgb {
+            red: 255,
+            green: 255,
+            blue: 255,
+        }
+    }
+}
+
+fn extract_rgb(value: &str) -> Result<Rgb, &str> {
+    if value.is_empty() {
+        return Err(ERR_EMPTY_STRING);
+    }
+    if value.len() != 7 || !value.starts_with('#') {
+        return Err(ERR_INVALID_FORMAT);
+    }
+
+    let red_str = &value[1..3];
+    let red = match u8::from_str_radix(red_str, 16) {
+        Ok(number) => number,
+        Err(_) => return Err(ERR_PARSE_ERROR),
+    };
+
+    let green_str = &value[3..5];
+    let green = match u8::from_str_radix(green_str, 16) {
+        Ok(number) => number,
+        Err(_) => return Err(ERR_PARSE_ERROR),
+    };
+
+    let blue_str = &value[5..7];
+    let blue = match u8::from_str_radix(blue_str, 16) {
+        Ok(number) => number,
+        Err(_) => return Err(ERR_PARSE_ERROR),
+    };
+
+    Ok(Rgb { red, green, blue })
+}
+
 fn map_ids(path: &str, map: &mut HashMap<u32, String>) {
     let data = match fs::read_to_string(path) {
         Ok(data) => data,
@@ -138,20 +187,15 @@ fn map_ids(path: &str, map: &mut HashMap<u32, String>) {
 }
 
 fn start_color(color: &str) -> String {
-    let color = match Rgb::from_hex_str(color) {
+    let color = match extract_rgb(color) {
         Ok(color) => color,
         Err(e) => {
             eprintln!("ERROR: failed to parse color {}. Error: {}", color, e);
-            Rgb::new(255.0, 255.0, 255.0, Some(255.0))
+            Rgb::new()
         }
     };
 
-    format!(
-        "\x1B[38;2;{};{};{}m",
-        color.red() as u8,
-        color.green() as u8,
-        color.blue() as u8
-    )
+    format!("\x1B[38;2;{};{};{}m", color.red, color.green, color.blue)
 }
 
 fn stop_color() -> &'static str {

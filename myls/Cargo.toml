@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
-devicons = "=0.6.7"
-colorsys = "0.6.7"
+devicons = "0.6.7"
 chrono = "0.4.38"
 libc = "0.2.9"
